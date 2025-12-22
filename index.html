@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jingle Collection</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        .stamp-active { animation: stamp-pop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        @keyframes stamp-pop {
+            0% { transform: scale(0); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .loading-spinner {
+            border: 3px solid rgba(0, 0, 0, 0.1);
+            border-top: 3px solid #2563eb;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+
+    <div id="app" class="max-w-md mx-auto min-h-screen flex flex-col p-5">
+        <!-- Header -->
+        <header class="flex justify-between items-center py-6">
+            <div class="flex items-center gap-2">
+                <div class="bg-blue-600 p-2 rounded-xl text-white shadow-lg shadow-blue-200">
+                    <i data-lucide="qr-code"></i>
+                </div>
+                <h1 class="font-extrabold text-xl tracking-tight">StampHub</h1>
+            </div>
+            <button id="exitBtn" class="hidden text-slate-400 hover:text-red-500 transition-colors">
+                <i data-lucide="log-out"></i>
+            </button>
+        </header>
+
+        <!-- Main Content -->
+        <main id="view-container" class="flex-1 flex flex-col justify-center">
+            <!-- Views will be injected here -->
+            <div id="loading" class="flex flex-col items-center gap-4">
+                <div class="loading-spinner"></div>
+                <p class="text-sm font-medium text-slate-400">Connecting to Firebase...</p>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="py-8 text-center">
+            <p class="text-[10px] font-bold text-slate-300 uppercase tracking-widest">
+                Secured via Student ID Lock
+            </p>
+        </footer>
+    </div>
+
+    <!-- Firebase Script Setup -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
+
+        // --- YOUR CONFIGURATION ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyBSODrRewqxiV0q5rjQ6nLDWabumiFmbQQ",
+            authDomain: "stamp-booth.firebaseapp.com",
+            projectId: "stamp-booth",
+            storageBucket: "stamp-booth.firebasestorage.app",
+            messagingSenderId: "996394633734",
+            appId: "1:996394633734:web:38e6594b45ae0d2088d187"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const DB_PATH = "stamp-booth-v1"; // Internal path structure
+
+        // App Constants
+        const TOTAL_STAMPS = 3;
+        const OTP_SECONDS = 180; // 3 Minutes
+        const DEADLINE = { hour: 20, min: 12 };
+
+        // Global State
+        let currentStudent = null;
+        let otpInterval = null;
+        let unsubscribeStudent = null;
+
+        // Utility: Get Unique Device ID
+        const getDeviceId = () => {
+            let id = localStorage.getItem('stamp_device_id');
+            if (!id) {
+                id = crypto.randomUUID();
+                localStorage.setItem('stamp_device_id', id);
+            }
+            return id;
+        };
+
+        // --- View Management ---
+        const container = document.getElementById('view-container');
+        const exitBtn = document.getElementById('exitBtn');
+
+        const showView = (html) => {
+            container.innerHTML = html;
+            lucide.createIcons();
+        };
+
+        // --- UI Screens ---
+        const renderLogin = () => {
+            exitBtn.classList.add('hidden');
+            showView(`
+                <div class="bg-white rounded-[2.5rem] p-8 shadow-xl shadow-slate-200/50 border border-slate-100">
+                    <h2 class="text-3xl font-extrabold mb-2">Welcome</h2>
+                    <p class="text-slate-400 text-sm mb-8">Enter your student ID to start collecting stamps.</p>
+                    
+                    <div class="space-y-4">
+                        <input type="text" id="studentIdInput" maxlength="10" placeholder="10-digit ID" 
+                            class="w-full bg-slate-50 border-2 border-slate-100 px-5 py-4 rounded-2xl text-xl font-mono tracking-[0.2em] text-center focus:border-blue-500 outline-none transition-all">
+                        
+                        <div id="loginError" class="hidden p-3 bg-red-50 text-red-600 text-xs rounded-xl flex items-center gap-2 font-bold">
+                            <i data-lucide="alert-circle" size="14"></i> <span id="errorText"></span>
+                        </div>
+
+                        <button id="loginSubmit" class="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold text-lg shadow-lg shadow-blue-100 active:scale-95 transition-all">
+                            Join Activity
+                        </button>
+                    </div>
+
+                    <button id="staffPortalBtn" class="w-full mt-10 text-slate-300 text-[10px] font-bold uppercase tracking-widest hover:text-blue-500 transition-colors">
+                        Staff Portal
+                    </button>
+                </div>
+            `);
+
+            document.getElementById('loginSubmit').onclick = handleLogin;
+            document.getElementById('staffPortalBtn').onclick = renderStaffPortal;
+        };
+
+        const renderDashboard = () => {
+            exitBtn.classList.remove('hidden');
+            const deadlinePassed = () => {
+                const now = new Date();
+                const d = new Date();
+                d.setHours(DEADLINE.hour, DEADLINE.min, 0);
+                return now > d;
+            };
+
+            showView(`
+                <div class="space-y-4">
+                    <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex items-center justify-between">
+                        <div>
+                            <p class="text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-1">Participant</p>
+                            <h3 class="text-xl font-mono font-bold text-blue-600">${currentStudent.studentNumber}</h3>
+                        </div>
+                        <div class="h-10 w-10 bg-blue-50 rounded-full flex items-center justify-center text-blue-600">
+                            <i data-lucide="user" size="20"></i>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+                        <div class="flex justify-between items-center mb-6">
+                            <span class="font-bold">Stamp Progress</span>
+                            <span class="text-sm font-bold text-blue-600">${currentStudent.stamps} / ${TOTAL_STAMPS}</span>
+                        </div>
+                        <div class="flex justify-between gap-3" id="stamps-grid">
+                            ${[1, 2, 3].map(i => `
+                                <div class="h-24 flex-1 rounded-2xl border-2 flex items-center justify-center transition-all ${currentStudent.stamps >= i ? 'bg-green-50 border-green-500' : 'bg-slate-50 border-dashed border-slate-200'}">
+                                    ${currentStudent.stamps >= i ? '<i data-lucide="check-circle-2" class="text-green-500 stamp-active" size="32"></i>' : `<span class="text-[10px] font-bold text-slate-300">BOOTH ${i}</span>`}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+
+                    <div id="action-area">
+                        ${currentStudent.stamps < TOTAL_STAMPS ? `
+                            <div class="bg-slate-900 rounded-[2.5rem] p-8 text-white text-center shadow-xl shadow-slate-300">
+                                <div id="otp-container">
+                                    ${currentStudent.otp ? `
+                                        <p class="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-2">Show to Staff</p>
+                                        <div class="text-6xl font-mono font-black tracking-widest mb-6">${currentStudent.otp}</div>
+                                        <div class="inline-flex items-center gap-2 bg-white/10 px-6 py-2 rounded-full text-sm font-bold">
+                                            <i data-lucide="clock" size="14" class="text-blue-400"></i>
+                                            <span id="otp-timer">0:00</span>
+                                        </div>
+                                        <button id="cancelOtp" class="block w-full mt-8 text-xs text-slate-500 hover:text-white underline">Cancel Code</button>
+                                    ` : `
+                                        <h4 class="font-bold text-xl mb-2">Ready to Stamp?</h4>
+                                        <p class="text-slate-400 text-sm mb-8">Generate a code and show it to the booth staff.</p>
+                                        <button id="getOtp" class="w-full bg-blue-600 py-4 rounded-2xl font-bold shadow-lg shadow-blue-900/40 active:scale-95 transition-all">Generate Code</button>
+                                    `}
+                                </div>
+                            </div>
+                        ` : `
+                            <div class="bg-white rounded-[2.5rem] p-8 shadow-sm border border-slate-100 text-center space-y-6">
+                                <div class="h-20 w-20 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center mx-auto animate-bounce">
+                                    <i data-lucide="award" size="40"></i>
+                                </div>
+                                <h3 class="text-2xl font-extrabold">Completed!</h3>
+                                <button id="finalSubmit" class="w-full bg-blue-600 text-white py-5 rounded-2xl font-black text-xl flex items-center justify-center gap-2 hover:bg-blue-700 transition-all shadow-xl shadow-blue-100">
+                                    ${deadlinePassed() ? 'Transcript Hours' : 'ลุ้นโชค (Lucky Draw)'}
+                                    <i data-lucide="chevron-right"></i>
+                                </button>
+                            </div>
+                        `}
+                    </div>
+                </div>
+            `);
+
+            // Event Listeners
+            if (document.getElementById('getOtp')) document.getElementById('getOtp').onclick = handleRequestOtp;
+            if (document.getElementById('cancelOtp')) document.getElementById('cancelOtp').onclick = handleCancelOtp;
+            if (document.getElementById('finalSubmit')) document.getElementById('finalSubmit').onclick = () => alert("Submitting to Google Sheets...");
+            
+            updateTimerDisplay();
+        };
+
+        const renderStaffPortal = () => {
+            exitBtn.classList.remove('hidden');
+            showView(`
+                <div class="space-y-6">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-xl font-bold flex items-center gap-2"><i data-lucide="shield-check" class="text-blue-600"></i> Staff Portal</h2>
+                    </div>
+
+                    <div class="bg-white rounded-3xl p-8 shadow-sm border border-slate-100">
+                        <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">Verification Code</label>
+                        <div class="flex gap-2">
+                            <input type="text" id="staffOtpInput" maxlength="4" placeholder="XXXX" 
+                                class="flex-1 bg-slate-50 border-2 border-slate-100 px-5 py-4 rounded-2xl text-2xl font-mono font-bold tracking-[0.3em] text-center focus:border-blue-500 outline-none">
+                            <button id="staffVerify" class="bg-slate-900 text-white px-6 rounded-2xl font-bold">Verify</button>
+                        </div>
+                        <p id="staffError" class="hidden text-red-500 text-xs mt-3 font-medium text-center"></p>
+                    </div>
+
+                    <div id="staff-user-card" class="hidden"></div>
+                </div>
+            `);
+
+            document.getElementById('staffVerify').onclick = handleStaffVerify;
+        };
+
+        // --- Logic Handlers ---
+
+        async function handleLogin() {
+            const input = document.getElementById('studentIdInput').value;
+            const errorDiv = document.getElementById('loginError');
+            const errorText = document.getElementById('errorText');
+
+            if (input.length !== 10) {
+                errorDiv.classList.remove('hidden');
+                errorText.innerText = "ID must be 10 digits.";
+                return;
+            }
+
+            const deviceId = getDeviceId();
+            const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', input);
+
+            try {
+                const snap = await getDoc(docRef);
+                if (snap.exists()) {
+                    const data = snap.data();
+                    if (data.deviceId !== deviceId) {
+                        errorDiv.classList.remove('hidden');
+                        errorText.innerText = "This ID is locked to another device.";
+                        return;
+                    }
+                    currentStudent = data;
+                } else {
+                    const newStudent = {
+                        studentNumber: input,
+                        deviceId: deviceId,
+                        stamps: 0,
+                        otp: null,
+                        otpExpiry: null
+                    };
+                    await setDoc(docRef, newStudent);
+                    currentStudent = newStudent;
+                }
+                startStudentSync();
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        const startStudentSync = () => {
+            if (unsubscribeStudent) unsubscribeStudent();
+            const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', currentStudent.studentNumber);
+            unsubscribeStudent = onSnapshot(docRef, (snap) => {
+                if (snap.exists()) {
+                    currentStudent = snap.data();
+                    renderDashboard();
+                }
+            });
+        };
+
+        async function handleRequestOtp() {
+            const code = Array.from({length:4}, () => "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ".charAt(Math.floor(Math.random()*36))).join('');
+            const expiry = Date.now() + (OTP_SECONDS * 1000);
+            const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', currentStudent.studentNumber);
+            await updateDoc(docRef, { otp: code, otpExpiry: expiry });
+        }
+
+        async function handleCancelOtp() {
+            const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', currentStudent.studentNumber);
+            await updateDoc(docRef, { otp: null, otpExpiry: null });
+        }
+
+        function updateTimerDisplay() {
+            if (!currentStudent || !currentStudent.otpExpiry) return;
+            const timerSpan = document.getElementById('otp-timer');
+            if (!timerSpan) return;
+
+            clearInterval(otpInterval);
+            otpInterval = setInterval(() => {
+                const remaining = Math.max(0, Math.floor((currentStudent.otpExpiry - Date.now()) / 1000));
+                const m = Math.floor(remaining / 60);
+                const s = (remaining % 60).toString().padStart(2, '0');
+                timerSpan.innerText = `${m}:${s}`;
+                
+                if (remaining <= 0) {
+                    clearInterval(otpInterval);
+                    handleCancelOtp();
+                }
+            }, 1000);
+        }
+
+        async function handleStaffVerify() {
+            const code = document.getElementById('staffOtpInput').value.toUpperCase();
+            const error = document.getElementById('staffError');
+            const card = document.getElementById('staff-user-card');
+            
+            error.classList.add('hidden');
+            const colRef = collection(db, 'artifacts', DB_PATH, 'public', 'data', 'participants');
+            const q = query(colRef, where("otp", "==", code));
+            const snap = await getDocs(q);
+
+            if (!snap.empty) {
+                const userData = snap.docs[0].data();
+                if (userData.otpExpiry < Date.now()) {
+                    error.innerText = "Code expired.";
+                    error.classList.remove('hidden');
+                    return;
+                }
+                
+                card.innerHTML = `
+                    <div class="bg-blue-600 rounded-3xl p-8 text-white shadow-xl animate-in fade-in slide-in-from-bottom-4">
+                        <p class="text-[10px] uppercase font-bold text-blue-200 tracking-widest mb-1">Found Participant</p>
+                        <h3 class="text-4xl font-mono font-bold mb-4">${userData.studentNumber}</h3>
+                        <div class="flex items-center gap-2 text-sm text-blue-100 mb-8">
+                            <i data-lucide="award" size="16"></i> Stamps: ${userData.stamps} / 3
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <button id="staffCancel" class="py-4 bg-white/10 rounded-2xl font-bold">Cancel</button>
+                            <button id="staffConfirm" class="py-4 bg-white text-blue-600 rounded-2xl font-bold shadow-lg">Give Stamp</button>
+                        </div>
+                    </div>
+                `;
+                card.classList.remove('hidden');
+                lucide.createIcons();
+
+                document.getElementById('staffCancel').onclick = () => card.classList.add('hidden');
+                document.getElementById('staffConfirm').onclick = async () => {
+                    const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', userData.studentNumber);
+                    await updateDoc(docRef, { stamps: userData.stamps + 1, otp: null, otpExpiry: null });
+                    card.classList.add('hidden');
+                    document.getElementById('staffOtpInput').value = "";
+                };
+            } else {
+                error.innerText = "Invalid OTP.";
+                error.classList.remove('hidden');
+            }
+        }
+
+        // Global Exit
+        exitBtn.onclick = () => {
+            if (unsubscribeStudent) unsubscribeStudent();
+            currentStudent = null;
+            renderLogin();
+        };
+
+        // Initialize App
+        window.onload = async () => {
+            try {
+                await signInAnonymously(auth);
+                renderLogin();
+            } catch (e) {
+                console.error("Auth failed", e);
+            }
+        };
+
+    </script>
+</body>
+</html>
