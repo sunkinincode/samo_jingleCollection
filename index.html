@@ -94,6 +94,35 @@
         </div>
     </div>
 
+    <!-- Modal for Exchange Password -->
+    <div id="exchange-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-6 modal-overlay">
+        <div class="bg-white w-full max-w-sm rounded-[2rem] p-8 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div class="text-center mb-6">
+                <div class="bg-amber-50 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 text-amber-600">
+                    <i data-lucide="key-round"></i>
+                </div>
+                <h3 class="text-xl font-bold text-slate-800">Exchange Verification</h3>
+                <p class="text-slate-400 text-sm mt-1">Enter the exchange password</p>
+            </div>
+            
+            <div class="space-y-4">
+                <input type="text" id="exchangePassInput" maxlength="5" placeholder="5-character code" 
+                    class="w-full bg-slate-50 border-2 border-slate-100 px-5 py-4 rounded-2xl text-xl font-mono tracking-[0.4em] text-center focus:border-blue-500 outline-none transition-all uppercase">
+                
+                <div id="exchangeError" class="hidden p-2 bg-red-50 text-red-600 text-[10px] rounded-xl font-bold text-center uppercase">
+                    Incorrect Exchange Password
+                </div>
+
+                <button id="exchange-confirm-btn" class="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold text-lg shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2">
+                    Submit Exchange
+                </button>
+                <button id="exchange-cancel-btn" class="w-full text-slate-400 text-sm font-medium hover:text-slate-600 py-2">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
         import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
@@ -113,6 +142,7 @@
         const db = getFirestore(app);
         const DB_PATH = "stamp-booth-v1";
         const STAFF_PASSWORD = "christmassci";
+        const EXCHANGE_PASSWORD = "CRM25"; // Static 5-character password
 
         const TOTAL_STAMPS = 3;
         const OTP_SECONDS = 180;
@@ -128,6 +158,7 @@
         const container = document.getElementById('view-container');
         const exitBtn = document.getElementById('exitBtn');
         const confirmModal = document.getElementById('confirm-modal');
+        const exchangeModal = document.getElementById('exchange-modal');
 
         const showView = (html) => {
             container.innerHTML = html;
@@ -298,7 +329,7 @@
                                     <div id="ready-view">
                                         <h4 class="font-bold text-xl mb-2">Collect a Stamp</h4>
                                         <p class="text-neutral-400 text-sm mb-8 px-4">Scan a booth QR code and show the code to staff.</p>
-                                        <button id="startScanBtn" class="w-full bg-blue-600 py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/20 active:scale-95 flex items-center justify-center gap-2 transition-all"><i data-lucide="camera" size="20"></i> Scan Booth QR</button>
+                                        <button id="startScanBtn" class="w-full bg-blue-600 py-4 rounded-2xl font-bold shadow-lg active:scale-95 flex items-center justify-center gap-2 transition-all"><i data-lucide="camera" size="20"></i> Scan Booth QR</button>
                                     </div>
                                 `}
                             </div>
@@ -306,10 +337,15 @@
                             <div class="bg-white rounded-[2.5rem] p-8 shadow-sm border border-slate-100 text-center space-y-6">
                                 <div class="h-20 w-20 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center mx-auto animate-bounce"><i data-lucide="award" size="40"></i></div>
                                 <h3 class="text-2xl font-extrabold text-slate-800">Activity Complete!</h3>
-                                <button id="finalSubmit" class="w-full bg-blue-600 text-white py-5 rounded-2xl font-black text-xl flex items-center justify-center gap-2 shadow-xl hover:bg-blue-700 active:scale-95 transition-all">
-                                    ${isLate() ? 'Transcript Hours' : 'ลุ้นโชค (Lucky Draw)'}
-                                    <i data-lucide="chevron-right"></i>
-                                </button>
+                                
+                                ${currentStudent.submitted ? `
+                                    <div class="p-4 bg-slate-50 text-slate-500 rounded-2xl font-bold">Successfully Submitted ✓</div>
+                                ` : `
+                                    <button id="finalSubmit" class="w-full bg-blue-600 text-white py-5 rounded-2xl font-black text-xl flex items-center justify-center gap-2 shadow-xl hover:bg-blue-700 active:scale-95 transition-all">
+                                        ${isLate() ? 'Transcript Hours' : 'ลุ้นโชค (Lucky Draw)'}
+                                        <i data-lucide="chevron-right"></i>
+                                    </button>
+                                `}
                             </div>
                         `}
                     </div>
@@ -317,11 +353,35 @@
             `);
             if (document.getElementById('startScanBtn')) document.getElementById('startScanBtn').onclick = startScanner;
             if (document.getElementById('cancelOtp')) document.getElementById('cancelOtp').onclick = handleCancelOtp;
-            if (document.getElementById('finalSubmit')) document.getElementById('finalSubmit').onclick = handleFinalSubmit;
+            if (document.getElementById('finalSubmit')) document.getElementById('finalSubmit').onclick = showExchangeModal;
             updateTimerDisplay();
         };
 
         // --- Logic Handlers ---
+
+        const showExchangeModal = () => {
+            exchangeModal.classList.remove('hidden');
+            lucide.createIcons();
+            
+            const input = document.getElementById('exchangePassInput');
+            const confirmBtn = document.getElementById('exchange-confirm-btn');
+            const cancelBtn = document.getElementById('exchange-cancel-btn');
+            const errorDiv = document.getElementById('exchangeError');
+            
+            input.value = "";
+            errorDiv.classList.add('hidden');
+            
+            cancelBtn.onclick = () => exchangeModal.classList.add('hidden');
+            confirmBtn.onclick = () => {
+                const pass = input.value.toUpperCase();
+                if (pass === EXCHANGE_PASSWORD) {
+                    exchangeModal.classList.add('hidden');
+                    handleFinalSubmit();
+                } else {
+                    errorDiv.classList.remove('hidden');
+                }
+            };
+        };
 
         const handleInitialLogin = () => {
             const input = document.getElementById('studentIdInput').value;
@@ -363,7 +423,6 @@
             if (isLoggingIn) return;
             isLoggingIn = true;
             
-            // UI state management for manual login
             const errorDiv = document.getElementById('loginError');
             const errorText = document.getElementById('errorText');
             if (errorDiv) errorDiv.classList.add('hidden');
@@ -376,13 +435,11 @@
                 if (snap.exists()) {
                     const data = snap.data();
                     if (data.deviceId !== deviceId) {
-                        // Display error in the login UI instead of standard alert
                         if (!isAutoLogin) {
                             errorText.innerText = "This id has use in other device";
                             errorDiv.classList.remove('hidden');
                             lucide.createIcons();
                         } else {
-                            // If auto-login fails due to multi-device, clear cache and reset to login screen
                             clearStudentCache();
                             renderLogin();
                         }
@@ -403,7 +460,6 @@
                     await setDoc(docRef, currentStudent);
                 }
                 
-                // Cache the student ID for next visit
                 saveStudentCache(studentId);
                 startStudentSync();
             } catch (e) { 
@@ -546,7 +602,6 @@
             if (unsubscribeStudent) unsubscribeStudent(); 
             currentStudent = null; 
             isLoggingIn = false;
-            // Clear cache upon manual exit
             clearStudentCache();
             renderLogin(); 
         };
@@ -556,7 +611,6 @@
                 await signInAnonymously(auth); 
                 startSettingsSync(); 
                 
-                // Check if user should be auto-logged in
                 const cachedId = getStudentCache();
                 if (cachedId) {
                     document.getElementById('status-text').innerText = "Logging in automatically...";
