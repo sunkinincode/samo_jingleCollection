@@ -7,6 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- Library for QR Scanning -->
     <script src="https://unpkg.com/html5-qrcode"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
     <style>
@@ -199,6 +200,9 @@
                 return now > d;
             };
 
+            const stampList = Array.isArray(currentStudent.stamps) ? currentStudent.stamps : [];
+            const stampCount = stampList.length;
+
             showView(`
                 <div class="space-y-4 animate-in slide-in-from-bottom-4">
                     <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex items-center justify-between">
@@ -214,22 +218,25 @@
                     <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
                         <div class="flex justify-between items-center mb-6">
                             <span class="font-bold">Progress</span>
-                            <span class="text-sm font-bold text-blue-600 px-3 py-1 bg-blue-50 rounded-full">${currentStudent.stamps} / ${TOTAL_STAMPS}</span>
+                            <span class="text-sm font-bold text-blue-600 px-3 py-1 bg-blue-50 rounded-full">${stampCount} / ${TOTAL_STAMPS}</span>
                         </div>
                         <div class="flex justify-between gap-3">
-                            ${[1, 2, 3].map(i => `
-                                <div class="h-24 flex-1 rounded-2xl border-2 flex items-center justify-center transition-all ${currentStudent.stamps >= i ? 'bg-green-50 border-green-500' : 'bg-slate-50 border-dashed border-slate-200'}">
-                                    ${currentStudent.stamps >= i ? '<i data-lucide="check-circle-2" class="text-green-500 stamp-active" size="32"></i>' : `<span class="text-[10px] font-bold text-slate-300">BOOTH ${i}</span>`}
+                            ${[1, 2, 3].map(i => {
+                                const hasStamp = stampList.includes(i);
+                                return `
+                                <div class="h-24 flex-1 rounded-2xl border-2 flex items-center justify-center transition-all ${hasStamp ? 'bg-green-50 border-green-500' : 'bg-slate-50 border-dashed border-slate-200'}">
+                                    ${hasStamp ? '<i data-lucide="check-circle-2" class="text-green-500 stamp-active" size="32"></i>' : `<span class="text-[10px] font-bold text-slate-300">BOOTH ${i}</span>`}
                                 </div>
-                            `).join('')}
+                                `;
+                            }).join('')}
                         </div>
                     </div>
 
                     <div id="action-area">
-                        ${currentStudent.stamps < TOTAL_STAMPS ? `
+                        ${stampCount < TOTAL_STAMPS ? `
                             <div class="bg-neutral-900 rounded-[2.5rem] p-8 text-white text-center shadow-xl">
                                 ${currentStudent.otp ? `
-                                    <p class="text-[10px] font-bold uppercase tracking-widest text-neutral-500 mb-2">Show to Staff</p>
+                                    <p class="text-[10px] font-bold uppercase tracking-widest text-neutral-500 mb-2">Show to Staff (Booth ${currentStudent.targetBooth})</p>
                                     <div class="text-6xl font-mono font-black tracking-widest mb-6 text-blue-400">${currentStudent.otp}</div>
                                     <div class="inline-flex items-center gap-2 bg-white/10 px-6 py-2 rounded-full text-sm font-bold">
                                         <i data-lucide="clock" size="14" class="text-blue-400"></i>
@@ -243,7 +250,7 @@
                                     </div>
                                     <div id="ready-view">
                                         <h4 class="font-bold text-xl mb-2">Visit a Booth</h4>
-                                        <p class="text-neutral-400 text-sm mb-8">Scan the booth QR code to generate your 4-digit verification OTP.</p>
+                                        <p class="text-neutral-400 text-sm mb-8">Scan a booth QR code that you haven't visited yet.</p>
                                         <button id="startScanBtn" class="w-full bg-blue-600 py-4 rounded-2xl font-bold shadow-lg active:scale-95 flex items-center justify-center gap-2 transition-all">
                                             <i data-lucide="camera" size="20"></i> Scan Booth QR
                                         </button>
@@ -280,12 +287,26 @@
             document.getElementById('scanner-view').classList.remove('hidden');
             html5QrCode = new Html5Qrcode("reader");
             const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+            
             html5QrCode.start({ facingMode: "environment" }, config, (decodedText) => {
-                const url = new URL(decodedText);
-                const booth = url.searchParams.get('booth');
-                if (booth) {
-                    html5QrCode.stop().then(() => { html5QrCode = null; handleRequestOtp(); });
-                }
+                try {
+                    const url = new URL(decodedText);
+                    const boothStr = url.searchParams.get('booth');
+                    if (boothStr) {
+                        const boothId = parseInt(boothStr);
+                        const stampList = Array.isArray(currentStudent.stamps) ? currentStudent.stamps : [];
+                        
+                        if (stampList.includes(boothId)) {
+                            alert(`You have already collected the stamp for Booth ${boothId}!`);
+                            html5QrCode.stop().then(() => { html5QrCode = null; renderDashboard(); });
+                        } else {
+                            html5QrCode.stop().then(() => { 
+                                html5QrCode = null; 
+                                handleRequestOtp(boothId); 
+                            });
+                        }
+                    }
+                } catch(e) { console.error("Invalid QR Link"); }
             }, () => {}).catch(err => { alert("Camera Error: Ensure you use HTTPS."); renderDashboard(); });
 
             document.getElementById('closeScanner').onclick = () => {
@@ -316,10 +337,7 @@
             const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', input);
 
             try {
-                const snapTask = getDoc(docRef);
-                const timeoutTask = new Promise((_, reject) => setTimeout(() => reject(new Error("Firebase Timeout: Check Rules")), 8000));
-                
-                const snap = await Promise.race([snapTask, timeoutTask]);
+                const snap = await getDoc(docRef);
 
                 if (snap.exists()) {
                     const data = snap.data();
@@ -329,14 +347,25 @@
                         isLoggingIn = false; btn.disabled = false; btnText.innerText = "Continue";
                         return;
                     }
+                    // Migration check: ensure stamps is an array
+                    if (!Array.isArray(data.stamps)) {
+                        data.stamps = []; // Reset if it was a number before
+                    }
                     currentStudent = data;
                 } else {
-                    currentStudent = { studentNumber: input, deviceId, stamps: 0, otp: null, otpExpiry: null, submitted: false };
+                    currentStudent = { 
+                        studentNumber: input, 
+                        deviceId, 
+                        stamps: [], // Start with empty array
+                        otp: null, 
+                        otpExpiry: null, 
+                        targetBooth: null,
+                        submitted: false 
+                    };
                     await setDoc(docRef, currentStudent);
                 }
                 startStudentSync();
             } catch (e) { 
-                console.error(e);
                 alert("Login Error: " + e.message);
                 isLoggingIn = false; btn.disabled = false; btnText.innerText = "Continue";
             }
@@ -346,20 +375,27 @@
             if (unsubscribeStudent) unsubscribeStudent();
             const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', currentStudent.studentNumber);
             unsubscribeStudent = onSnapshot(docRef, (snap) => {
-                if (snap.exists()) { currentStudent = snap.data(); if (!html5QrCode) renderDashboard(); }
+                if (snap.exists()) { 
+                    currentStudent = snap.data(); 
+                    if (!html5QrCode) renderDashboard(); 
+                }
             }, (err) => alert("Sync Error: " + err.message));
         };
 
-        async function handleRequestOtp() {
+        async function handleRequestOtp(boothId) {
             const code = Array.from({length:4}, () => "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ".charAt(Math.floor(Math.random()*36))).join('');
             const expiry = Date.now() + (OTP_SECONDS * 1000);
             const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', currentStudent.studentNumber);
-            await updateDoc(docRef, { otp: code, otpExpiry: expiry });
+            await updateDoc(docRef, { 
+                otp: code, 
+                otpExpiry: expiry,
+                targetBooth: boothId 
+            });
         }
 
         async function handleCancelOtp() {
             const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', currentStudent.studentNumber);
-            await updateDoc(docRef, { otp: null, otpExpiry: null });
+            await updateDoc(docRef, { otp: null, otpExpiry: null, targetBooth: null });
         }
 
         async function handleFinalSubmit() {
@@ -388,11 +424,15 @@
             if (!snap.empty) {
                 const userData = snap.docs[0].data();
                 if (userData.otpExpiry < Date.now()) { alert("Expired."); return; }
+                
                 const card = document.getElementById('staff-user-card');
+                const stampList = Array.isArray(userData.stamps) ? userData.stamps : [];
+
                 card.innerHTML = `
                     <div class="bg-blue-600 rounded-3xl p-8 text-white shadow-xl animate-in fade-in slide-in-from-bottom-4">
+                        <p class="text-[10px] uppercase font-bold text-blue-200 tracking-widest mb-1">Grant Stamp for Booth ${userData.targetBooth}</p>
                         <h3 class="text-3xl font-mono font-bold mb-4">${userData.studentNumber}</h3>
-                        <p class="text-sm opacity-80 mb-8 font-medium">Stamps: ${userData.stamps} / 3</p>
+                        <p class="text-sm opacity-80 mb-8 font-medium">Progress: ${stampList.length} / 3 stamps collected</p>
                         <div class="grid grid-cols-2 gap-3">
                             <button id="staffCancel" class="py-4 bg-white/10 rounded-2xl font-bold">Cancel</button>
                             <button id="staffConfirm" class="py-4 bg-white text-blue-600 rounded-2xl font-bold shadow-lg">Confirm</button>
@@ -403,8 +443,21 @@
                 document.getElementById('staffCancel').onclick = () => card.classList.add('hidden');
                 document.getElementById('staffConfirm').onclick = async () => {
                     const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', userData.studentNumber);
-                    await updateDoc(docRef, { stamps: userData.stamps + 1, otp: null, otpExpiry: null });
-                    card.classList.add('hidden'); document.getElementById('staffOtpInput').value = "";
+                    
+                    // Add new booth to stamps array
+                    const newStamps = [...stampList];
+                    if (!newStamps.includes(userData.targetBooth)) {
+                        newStamps.push(userData.targetBooth);
+                    }
+
+                    await updateDoc(docRef, { 
+                        stamps: newStamps, 
+                        otp: null, 
+                        otpExpiry: null,
+                        targetBooth: null 
+                    });
+                    card.classList.add('hidden'); 
+                    document.getElementById('staffOtpInput').value = "";
                 };
             } else { alert("Invalid OTP"); }
         }
